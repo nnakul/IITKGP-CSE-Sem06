@@ -1,0 +1,1 @@
+w=$'\u0020';x=$1;d=2;eval "while"$w"[["$w"\$d"$w"-lt"$w"\$x"$w"||"$w"\$d"$w"-eq"$w"\$x"$w"]];do"$w"while"$w"[["$w"\$((\$x"$w"%"$w"\$d))"$w"-eq"$w"0"$w"]];do"$w"echo"$w"-n"$w"\"\$w\"\$d;x=\$((\$x/\$d));done;d=\$((\$d+1));done;echo"$w"\$w;"

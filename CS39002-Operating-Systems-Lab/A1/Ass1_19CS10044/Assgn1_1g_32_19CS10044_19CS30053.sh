@@ -1,0 +1,1 @@
+w=$'\u0020';eval "cat\$w/dev/urandom|awk\$w-v"$w"OFS=','\$w'{for(i=0;i<9;i++)"$w"printf"$w"\"%d,\",int((NR+1)*32768*rand());print"$w"int((NR+1)*32768*rand())}'|head\$w-n"$w"150\$w>\$w\$1;zer=0;count=\$(cut\$w-d\$w','\$w-f\$w\$2\$w\$1|grep\$w-E\$w-c\$w\$3);if"$w"[["$w"\$count"$w"-ne"$w"\$zer"$w"]];then"$w"echo"$w"\"YES\";else"$w"echo"$w"\"NO\";fi;"

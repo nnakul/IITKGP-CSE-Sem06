@@ -1,0 +1,1 @@
+w=$'\u0020';indir="1.b.files";dir="1.b.files.out";mkdir$w$dir;eval "for"$w"f"$w"in"$w"\$indir/*.txt;do"$w"fn=(\${f////"$w"});fnn=\${fn[-1]};sort"$w"-n"$w"\$f"$w"-o"$w"\$dir/\$fnn;done;cat\$w\$dir/*.txt|sort\$w-n|uniq\$w-c|awk\$w'{print"$w"\$2\""$w"\"\$1}'\$w>\$w\$dir/1.b.out.txt;"

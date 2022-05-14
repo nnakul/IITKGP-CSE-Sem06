@@ -1,0 +1,1 @@
+w=$'\u0020';eval "outfile=\"1f_output_\"\$2\"_column.freq\";cut\$w-d\$w\"\$w\"\$w-f\$2\$w\$1|tr\$w'[:upper:]'\$w'[:lower:]'|sort|uniq\$w-c|sort\$w-bnr|awk\$w'{print"$w"\$2\""$w"\"\$1}'\$w>\$w\$outfile"

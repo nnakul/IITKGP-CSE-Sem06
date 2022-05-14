@@ -1,0 +1,1 @@
+w=$'\u0020';dir="data1d/temp";newdir="files_mod";mkdir$w$newdir;eval "for"$w"f"$w"in"$w"\$dir/*;do"$w"fn=(\${f////\$w});fnn=\${fn[-1]};cat\$w-n\$w\$f\$w>\$w\$newdir/\$fnn;sed\$w-i\$w\"s/^[\$w][\$w]*//g\"\$w\$newdir/\$fnn;sed\$w-i\$w\"s/\t/,/g\"\$w\$newdir/\$fnn;sed\$w-i\$w\"s/\$w/,/g\"\$w\$newdir/\$fnn;done;"
