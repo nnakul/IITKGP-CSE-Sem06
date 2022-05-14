@@ -1,0 +1,314 @@
+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+    >>> Structure Definitions (rsocket.h) <<<
+
+(1.) unack_msg
+• Significance -- Describes the state & features of a messsage that is sent by an MRP socket but is not yet
+    acknowledged by the reciever. These unacknowledged messages need to be remembered so that the sender can 
+    periodically resend these messages, due to the possibility that either the earlier sent message or its ack sent
+    by the reciever got lost during transmission.
+
+• Data fields -- The data fields of this structure and their descriptions are as follows.
+    > valid - [type: int] Tells whether an unack_msg object is a valid instance or not. unack_msg::valid = 1 means
+    valid and unack_msg::valid = 0 means invalid.
+    > sent_time - [type: int] The unix timestamp (in secs) at which the sender (most recently) sent this message.
+    > msg_seq_no - [type: int] The sequence number associated with that unacknowledged message.
+    > size - [type: int] The size (in bytes) of the message associated with this unack_msg instance.
+    > msg - [type: void*] Pointer to a dynamically-allocated memory segment that stores the sent message.
+    > dest_addr - Refers to a generic socket-address structure (struct sockaddr) that is mainly used for the
+    protocol specific address & port of the destination (the socket to which this unacknowledged message is sent).
+    Please note that in order to identify the unique address-port of the destination, we need not keep two data
+    fields. Simply typecast a "struct sockaddr*" to "struct sockaddr_in*" and extract both the port and the
+    address of the destination socket. So we can store both at the cost of one structure.
+
+(2.) recvd_msg
+• Significance -- Describes the state & features of a message that is recived by an MRP socket. This structure
+    is defined to implement a buffer in which all the recived messages are stored (concurrently) while the actual
+    r_recvfrom call directly returns on looking-up this buffer (discussed in more detail later).
+
+• Data fields -- The data fields of this structure and their descriptions are as follows.
+    > size - [type: int] The size (in bytes) of the message associated with this unack_msg instance.
+    > msg - [type: void*] Pointer to a dynamically-allocated memory segment that stores the sent message.
+    > sender_addr - [type: struct sockaddr] A generic socket-address structure that is mainly used for the protocol
+    specific address of the sender (the socket from which this message was received).
+    > sender_addr_len - [type: socklen_t] An integer type of width that describes the length of the source address.
+
+(3.) recvd_msg_queue
+• Significance -- A circular queue of recieved messages (recvd_msg objects) for any MRP socket. Whenever a new
+    message is recieved by the socket (concurrently through the thread R as we shall see later), it is wrapped in 
+    a recvd_msg object and pushed at the back of the queue. Similarly, whenever a recieved message is retrieved by 
+    the socket (using r_recvfrom function in the main thread as we shall see later), the front-most message is 
+    un-wrapped from the object and returned and the the queue is popped from the front.
+
+• Data fields -- The data fields of this structure and their descriptions are as follows.
+    > table - [type: recvd_msg[TABLE_SIZE]; TABLE_SIZE is a macro] A static array of recvd_msg objects, with the 
+    maximum size of TABLE_SIZE, whose value is given as 50 in the assignment.
+    > size - [type: int] The size of the queue (varies from 0 to TABLE_SIZE).
+    > front - [type: int] The index of the array that corresponds to the front of the circular queue. More formally,
+    the index of the array from which the message for the next r_recvfrom call is returned.
+    > back - [type: int] The index of the array that corresponds to the back of the circular queue. More formally,
+    the index of the array to which the message recieved next will be stored.
+
+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+    >>> Macro Definitions (rsocket.h) <<<
+
+(1.) #define SOCK_MRP 0
+Defines our own special socket type, MRP. The value of this type is kept as 0, which does not conflict with the
+integer values of the other types as defined in the system library, whose snippet is shown below.
+
+    enum __socket_type
+    {
+        SOCK_STREAM = 1,                /* Sequenced, reliable, connection-based
+                                        byte streams.  */
+        #define SOCK_STREAM SOCK_STREAM
+        SOCK_DGRAM = 2,                /* Connectionless, unreliable datagrams
+                                        of fixed maximum length.  */
+        #define SOCK_DGRAM SOCK_DGRAM
+        SOCK_RAW = 3,                        /* Raw protocol interface.  */
+        #define SOCK_RAW SOCK_RAW
+        SOCK_RDM = 4,                        /* Reliably-delivered messages.  */
+        #define SOCK_RDM SOCK_RDM
+        SOCK_SEQPACKET = 5,                /* Sequenced, reliable, connection-based,
+                                        datagrams of fixed maximum length.  */
+        #define SOCK_SEQPACKET SOCK_SEQPACKET
+        SOCK_DCCP = 6,                /* Datagram Congestion Control Protocol.  */
+        #define SOCK_DCCP SOCK_DCCP
+        SOCK_PACKET = 10,                /* Linux specific way of getting packets
+                                        at the dev level.  For writing rarp and
+                                        other similar things on the user level. */
+        #define SOCK_PACKET SOCK_PACKET
+
+        /* Flags to be ORed into the type parameter of socket and socketpair and
+            used for the flags parameter of paccept.  */
+
+        SOCK_CLOEXEC = 02000000,        /* Atomically set close-on-exec flag for the
+                                        new descriptor(s).  */
+        #define SOCK_CLOEXEC SOCK_CLOEXEC
+        SOCK_NONBLOCK = 04000                /* Atomically mark descriptor(s) as
+                                        non-blocking.  */
+        #define SOCK_NONBLOCK SOCK_NONBLOCK
+    };
+
+(2.) #define TABLE_SIZE 50
+The maximum size of any table-like data structure that is defined in the implementation. This includes unack_msg_table
+(an array of unack_msg) and recvd_msg_table (a circular queue of type recvd_msg_queue, but the underlying implementation
+is of an array of recvd_msg).
+
+(3.) #define T 2
+T is the sleeping time (int secs) of the thread S (with the start routine thread_handler_S). It is also half of the deadline
+for recieving the acknowledgement from the reciever for any sent datagram, since the datagram was last sent. After this
+deadline, the message will be re-sent to the reciever (read thread_handler_S for more information).
+Its value, 2, as given in the assignment.
+
+(4.) #define p 0.05
+The probability that a datagram recieved by a socket will be dropped. It is used to simulate behaviour of a noisy channel.
+Read dropMessage to get more information. Its (initial) value is kept at 0.05. While testing it has to be varied from 0.05
+to 0.50 in steps of size 0.05.
+
+(5.) #define RECV_SIZE 65535
+The (maximum) size of the datagram that can be recieved by any MRP socket. It is used as the third parameter to recvfrom call
+in thread_handler_R (execution unit of thread R). Read thread_handler_R for more information.
+
+(6.) #define RECV_BLOCK_T 1
+To simulate call to r_recvfrom as a blocking call, it has to sleep for some time if it cannot return any message, before waking
+up and trying again. The value of this "some time" (in secs) is RECV_BLOCK_T. Note that it is different from the macro T, whose
+value was given in the assignment. Read r_recvfrom for more information.
+
+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+    >>> Structure Instantiations & Globals (rsocket.c) <<<
+
+(1.) msg_seq_no - [type: int] A global that defines the sequence number for the next message that is sent 
+    by an MRP socket. Its value is initialized to 0 and can go upto ~4.3B. Though impractical atleast for this
+    assignment, but still if the value tends to cross the upper bound, it is wrapped around back to 0.
+
+(2.) unack_msg_table - [type: unack_msg*] A global that points to a dynamically allocated memory segment for an
+    array of unack_msg objects. It can contain a maximum of TABLE_SIZE objects, whose value as given in the assignment
+    is 50. THis table records all the messages that were sent by an MRP socket but for which the acknowledgement was
+    not recieved from the reciever. 
+
+(3.) recvd_msg_table - [type: recvd_msg_queue*] A global that points to a dynamically allocated memory segment for
+    a recvd_msg_queue object. As already mentioned, recvd_msg_queue defines a circular queue of messages recieved by an
+    MRP socket.
+
+In order to satisfy the principle of mutual exclusion and prevent any possible race conditions that might occur due 
+to various threads trying to access/modify the same resource, mutex locks provided by the PThread library are used. 
+For all the global data structures and shared memory segments, a lock should be defined so as to prevent race 
+conditions on that shareable entity.
+
+(4.) lock_unack - [type: pthread_mutex_t] lock_unack is a lock defined for accessing/modifying the unack_msg_table
+    data structure.
+
+(5.) lock_recvd - [type: pthread_mutex_t] lock_recvd is a lock defined for accessing/modifying the recvd_msg_table
+    data structure.
+
+(6.) r_tid - [type: pthread_t] The thread ID of the thread R spawned during socket creation (in r_socket).
+
+(7.) s_tid - [type: pthread_t] The thread ID of the thread S spawned during socket creation (in r_socket).
+
+(8.) fd_gbl - [type: int] The file descriptor of the socket that is created by r_socket. Note that since each
+program can create only one MRP socket (given in the assignment), one global suffices.
+
+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+    >>> List of Functions <<<
+
+(1.) r_socket
+ [ int r_socket(int __domain, int __type, int __protocol) ]
+> The type of the socket should always be SOCK_MRP
+> Initializes the pthread mutex locks -- lock_recvd, lock_unack
+> Sets the seed of the random number generator with the current unix time.
+> Initializes the msg_seq_no to zero.
+> Creates a UDP socket with "socket(__domain, SOCK_DGRAM, __protocol)" call.
+> Declares memory for and initializes the recvd_msg_table and unack_msg_table data structures.
+> Spawns two threads -- R, S whose entry points are set as the functions thread_handler_R and 
+thread_handler_S respectively.
+
+(2.) r_bind
+    [ int r_bind(int __fd, const struct sockaddr *__addr, socklen_t __len) ]
+> Assigns the address specified by __addr to the socket referred to by the file descriptor __fd; uses 
+"bind(__fd, __addr, __len)" call.
+
+(3.) r_sendto
+    [ ssize_t r_sendto(int __fd, const void *__buf, size_t __n, int __flags, const struct sockaddr *__addr, 
+                       socklen_t __addr_len) ]
+> Used to a send a message immediately from the socket specified by the file descriptor __fd, to a socket specified by the 
+socket-address structure __addr.
+> Dynamically allocates memory for a message of size (__n + 4), where __n bytes correspond to the actual content that is to
+be sent (first __n bytes of __buf) and the leading 4 bytes correspond to the 32-bit integeral message sequence number.
+> An invalid (free) cell from the unack_msg_table data structure is filled with the details of this message, that includes
+the to-be-sent message (with the sequence number), destination address and port, time of sending among others. The search
+in the unack_msg_table data structure for a free cell is done inside a critical-section, protected by the lock_unack mutex-lock.
+> The "augmented" message (msg) is then sent to the __addr with "sendto(__fd, msg, __n + 4, __flags, __addr, __addr_len)" call.
+
+(4.) r_recvfrom
+    [ ssize_t r_recvfrom(int __fd, void *__buf, size_t __n, int __flags, struct sockaddr *__addr, socklen_t *__addr_len) ]
+> Contains an infinite loop to simulate a blocking call. It returns only when the recvd_msg_table data structure (a circular 
+queue of recvieved messages) is not empty. Otherwise, it sleeps for some time (RECV_BLOCK_T secs -- declared as a macro, value
+kept as 1; easy to change) and then re-iterates.
+> The access into and deletion from the recvd_msg_table data structure is done inside a critical-section protected by the 
+lock_recvd mutex-lock.
+> If the recvd_msg_table is not empty, the front of the queue is extracted and the __buf, __addr, __addr_len parameters 
+passed with the r_recvfrom call are updated with the _recvd_msg::msg, _recvd_msg::sender_addr and _recvd_msg::sender_addr_len
+respectively.
+> __n holds importance in the following way. Let the size of the front-most entry in the queue (_recvd_msg::size field) is K.
+CASE 1: __n == 0 -> Simply return 0 (nothing useful)
+CASE 2: __n >= K -> Copy the entire message (_recvd_msg::msg) to __buf. Remove the front-most entry from the queue and free
+                    the associated memory. Return K.
+CASE 2: __n < K -> Copy only the first __n bytes of the message (_recvd_msg::msg) to __buf. Remove the front-most entry from 
+                   the queue and free the associated memory. Return __n.
+
+(5.) r_close
+    [ int r_close(int __fd) ]
+> Asynchronously cancel/terminate the threads S and R using pthread_cancel call.
+> Destroy the mutex-locks lock_recvd and lock_unack.
+> Free the auxillary space for all the entries in the unack_msg_table and the whole data structure itself.
+> Free the auxillary space for all the entries in the recvd_msg_table and the whole data structure itself.
+> Close the file descriptor __fd passed as the parameter.
+
+(6.) thread_handler_R
+    [ void *thread_handler_R(void *fdv) ]
+> The start routine or the entry point invoked when the thread R is created.
+> This thread is responsible for concurrently recieving all the messages on the MRP socket (underlying implementation as UDP).
+> The thread waits on recvfrom call to recieve a message. Note that, the third parameter that needs to be passed to recvfrom
+call is the size of the message that is to be recieved. Since this thread is not user-controlled (the user side doesn't even have
+the knowledge that their is another thread in the process), we can not have a user-defined length and it has to be a constant only.
+> The constant third parameter to the recvfrom call in thread_handler_R is RECV_SIZE (defined as macro).
+> dropMessage noise-inducing-function (discussed later) is used to decide whether or not to discard the recieved message. The value
+passed as arguement to dropMessage call is p, that is defined as a macro.
+> Note that the recieved message is also discarded if its size is less than 4 bytes. This is so because in the assignment its 
+mentioned that a message is always sent with a sequence number (4-byte integer) augmented to the data payload. Hence, if the
+recieved size is less than 4 (even when value of RECV_SIZE > 4), there must be a problem.
+> The sequence number is decapsulated from the leading 4 bytes of the message. The remaining message is compared against "ACK" to check
+if it is an acknowledgment reciept. If so, the unack_msg_table is looped over (mutex-lock used) and if a valid entry with the same 
+sequence number is found, the auxillary space for that entry is freed and the loop breaks out and continues to wait for the next datagram. 
+If the sequence number matches with that of none of the valid entries in the table, the acknowledgement reciept is discarded and it 
+continues to wait for the next datagram.
+> If the recieved datagram is not an acknowledgement reciept, it is pushed at the back of the circular queue, recvd_msg_table (mutex-lock
+used), with all the fields set to appropriate values (as per their meaning already stated above for recvd_msg).
+> This is followed by sending an "ACK" message to the sender, augmented with the same sequence number as of the recieved datagram.
+> It then continues to wait to recieve the next datagram.
+
+(7.) thread_handler_S
+    [ void *thread_handler_S(void *fdv) ]
+> The start routine or the entry point invoked when the thread S is created.
+> This thread is responsible for periodically checking the unacknowledged sent messages from the unack_msg_table data structure and
+resend them to their respective destinations. The procedure to implement this is as follows.
+> thread_handler_S contains an infinite loop. Inside the loop, it first starts with sleeping for T secs (macro).
+> When it wakes up, it loops over all the entries in the unack_msg_table table. Note that accessing and (possibly) modifying any
+entry in the table must be inside a critical-section protected by lock_unack mutex-lock.
+> For each message in the table, if it has been less than 2T time since it was most recently sent to the destination, continue.
+> Otherwise, resend the same number of bytes (_unack_msg::size) of the same message (_unack_msg::msg) to the same destination 
+(_unack_msg::dest_addr), and update the _unack_msg::sent_time field of the record to the current unix time. Now continue with the 
+next entry in the table.
+
+(8.) dropMessage
+    [ int dropMessage(float __p) ]
+> Returns a random sample X chosen from a Bernoulli distribution defined by the P.M.F. P where
+P(X = 1) = __p  ,  P(X = 0) = 1 - __p
+
+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+    >>> Average Count of Transmissions <<<
+
+ Average number of transmissions made to send each character =  Total number of transmissions that are made to 
+                                                                send the string / No. of characters in the string
+    
+    +++ EXAMPLE O1 +++
+ String used = antidisestablishmentarianism
+ No. of characters in the string = 28
+
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ |   p    |   String received by user2                                      |   Total number of transmissions   |   Average Number of transmissions  |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.05   |  tidisestablishmentarianismani                                  |   29                              |    1.0357                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.10   |  antisestbishmentarianismadialniiinid                           |   36                              |    1.2857                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.15   |  antidesablhmentaraniaitissaisimi                               |   32                              |    1.1428                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.20   |  antidisestalshmentariansatisemhabihaa                          |   37                              |    1.3214                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.25   |  antdisestablishentrinismamtidastaaims                          |   37                              |    1.3214                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.30   |  antiiesaishmentarasmaaisnislaidtsbsi                           |   36                              |    1.2857                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.35   |  antidisebliseriasmadistabihetiimasenanmimas                    |   43                              |    1.5357                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.40   |  aidisestablisentrimanminsratishatiiaiaiiiiiiiiii               |   48                              |    1.7143                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.45   |  antisstabhmntaranismaetaininmitlsnrindtaennaenteeeee           |   52                              |    1.8571                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.50   |  nditblhmentrisaatiaesailiisrliarsnmnainmiatdisnmaasiasimaim    |   59                              |    2.1071                          |
+ +--------+-----------------------------------------------------------------+-----------------------------------+------------------------------------+
+
+    +++ EXAMPLE O2 +++
+ String used = supercalifragilisticexpialidocious
+ No. of characters in the string = 34
+
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ |   p    |   String received by user2                                                      |   Total number of transmissions   |   Average Number of transmissions  |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.05   |  supercalifragilisticexpialdocioussui                                           |   36                              |    1.0588                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.10   |  supecalifragiliicexpialidoioussrclstsac                                        |   39                              |    1.1471                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.15   |  supercalifragiistiexpialidoiossceucifgdlitclcc                                 |   46                              |    1.3529                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.20   |  superliragisicexpialdociousucalfiltiosrl                                       |   40                              |    1.1765                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.25   |  superclirailsticxilidocussgrfipiaciosraepiiisaaa                               |   48                              |    1.4117                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.30   |  secaifagilisticpialidciussupxiarileoragloclagiio                               |   48                              |    1.4117                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.35   |  upercalialsticexalocioussrgistpiliufrgicldiolfcpiuriipi                        |   55                              |    1.6176                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.40   |  uprcalfragiliicexldocioscpiiarlgiistoosieeprcliu                               |   48                              |    1.4117                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.45   |  ercfiistcpiaidossurarsialdciouerliagliceicraiiupaiciiiixauaiupp                |   63                              |    1.8529                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+ | 0.50   |  suelirgiixpiliorlrliliticxcousspecrlitpicifrsiceaicarascdaiilcafaialiiiiiii    |   75                              |    2.2058                          |
+ +--------+---------------------------------------------------------------------------------+-----------------------------------+------------------------------------+
+
+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+

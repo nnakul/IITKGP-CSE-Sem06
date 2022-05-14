@@ -1,0 +1,10 @@
+all: user1 user2
+
+user1: 	librsocket.a user1.c 
+		gcc -o user1 user1.c -L. -lrsocket -lpthread
+
+user2: 	librsocket.a user2.c 
+		gcc -o user2 user2.c -L. -lrsocket -lpthread
+			
+clean: 
+		rm -f user1 user2
