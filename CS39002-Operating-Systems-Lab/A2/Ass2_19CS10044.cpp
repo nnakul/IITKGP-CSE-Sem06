@@ -2,7 +2,6 @@
 // CS39002 Operating Systems Laboratory
 // ASSIGNMENT 02 | Use of System Calls
 //      Nakul Aggarwal (19CS10044)
-//      Hritaban Ghosh (19CS30053)
 
 #include <stdio.h>
 #include <stdlib.h>
